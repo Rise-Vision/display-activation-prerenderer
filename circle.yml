@@ -1,0 +1,26 @@
+dependencies:
+  override:
+    - mvn dependency:resolve -s config/settings.xml
+  cache_directories:
+    - /home/ubuntu/nvm
+  post:
+    - mvn install -s config/settings.xml
+    - git clone git@github.com:Rise-Vision/private-keys.git
+    - cp private-keys/core/.appcfg_oauth2_tokens_java ~
+    - pwd && mvn appengine:devserver_start:
+        background: true 
+test:
+  post:
+    - mkdir -p $CIRCLE_TEST_REPORTS/junit/
+    - find . -type f -regex ".*/target/surefire-reports/.*xml" -exec cp {} $CIRCLE_TEST_REPORTS/junit/ \;
+deployment:
+  staging:
+    branch: /(feature|hotfix|fix|chore).*/
+    commands:
+      - mvn appengine:update -Dappengine.version=$(echo -n $CIRCLE_BRANCH |awk 'BEGIN{FS="/"}{print tolower($NF)}') -Dappengine.appId=rvacore-test
+  production:
+    branch: master
+    commands:
+      - mvn clean install -s config/settings.xml
+      - mvn appengine:update -Dappengine.version=r$(echo -n $((CIRCLE_BUILD_NUM%10))) -Dappengine.appId=rvaserver2
+      - mvn appengine:set_default_version -Dappengine.version=r$(echo -n $((CIRCLE_BUILD_NUM%10))) -Dappengine.appId=rvaserver2
