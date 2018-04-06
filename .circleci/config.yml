@@ -1,0 +1,80 @@
+version: 2
+
+jobs:
+  "prepare":
+    docker: &DOCKERIMAGE
+      - image: jenkinsrise/cci-v2-docker-java8-gcloud:0.0.1
+    working_directory: ~/display-activation-prerenderer
+    
+    steps:
+      - checkout
+      - restore_cache:
+          key: display-activation-prerenderer-{{ checksum "pom.xml" }}
+      - run: mvn dependency:go-offline
+      - save_cache:
+          paths:
+            - ~/.m2
+          key: display-activation-prerenderer-{{ checksum "pom.xml" }}
+            
+  "deploy_stage":
+    docker: *DOCKERIMAGE
+    working_directory: ~/display-activation-prerenderer 
+    steps:
+      - checkout
+      - restore_cache:
+          key: display-activation-prerenderer-{{ checksum "pom.xml" }}
+      - run: if find src/main |grep /queue.xml; then exit 1; fi
+      - run: "sudo gcloud --quiet components update"
+      - run:
+          name: Deploy to Core if tests pass and branch is not master
+          command: |
+            echo $ACCT_AUTH_STAGE | base64 --decode --ignore-garbage > ${HOME}/gcloud-service-key.json
+            gcloud auth activate-service-account --key-file=${HOME}/gcloud-service-key.json
+            gcloud config set project $PROJECT_ID_STAGE
+            mvn appengine:deploy -Dapp.deploy.version=$(echo -n $CIRCLE_BRANCH |awk 'BEGIN{FS="/"}{print tolower($NF)}') -Dapp.deploy.promote=false -Dapp.deploy.project=rvacore-test
+      - store_test_results:
+          path: ~/display-activation-prerenderer/target/surefire-reports
+      - store_artifacts:
+          path: ~/display-activation-prerenderer/target/surefire-reports
+          
+  "deploy_prod":
+    docker: *DOCKERIMAGE
+    working_directory: ~/display-activation-prerenderer 
+    steps:
+      - checkout
+      - restore_cache:
+          key: display-activation-prerenderer-{{ checksum "pom.xml" }}
+      - run: if find src/main |grep /queue.xml; then exit 1; fi
+      - run: "sudo gcloud --quiet components update"
+      - run:
+          name: Deploy to Core if tests pass and branch is master
+          command: |
+            echo $ACCT_AUTH | base64 --decode --ignore-garbage > ${HOME}/gcloud-service-key.json
+            gcloud auth activate-service-account --key-file=${HOME}/gcloud-service-key.json
+            gcloud config set project $PROJECT_ID
+            mvn appengine:deploy -Dapp.deploy.version=r$(echo -n $((CIRCLE_BUILD_NUM%10))) -Dapp.deploy.promote=true -Dapp.deploy.project=rvaserver2
+      - store_test_results:
+          path: ~/display-activation-prerenderer/target/surefire-reports
+      - store_artifacts:
+          path: ~/display-activation-prerenderer/target/surefire-reports
+
+workflows:
+  version: 2
+  build_and_deploy:
+    jobs:
+      - "prepare"
+      - "deploy_stage":
+          requires:
+            - prepare
+          filters:
+            branches:
+              ignore:
+                - master
+
+      - "deploy_prod":
+          requires:
+            - prepare
+          filters:
+            branches:
+              only:
+                - master
